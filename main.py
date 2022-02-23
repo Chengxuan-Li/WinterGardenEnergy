@@ -1,7 +1,7 @@
 #from Rhino.Geometry import *
 from typing import List
-
 import math
+
 
 class Vector3d:
     def __init__(self, x, y, z):
@@ -56,15 +56,17 @@ class OpaqueConstructionMaterial:
 
 
 class Construction:
-    def __init__(self, name = "Default Opaque Construction", area = 1.0, normal = Vector3d(0, -1, 0), height = 1.0):
+    def __init__(self, name = "Default Opaque Construction", area = 1.0, normal = Vector3d(0, -1, 0), height = 1.0, thickness = 0.0,  density = 1.5, U = 4.0):
         self.name = name
         self.materials = []
         self.normal = normal
         self.area = area
         self.height = height
+        self.thickness = thickness
+        self.density = density
 
         #GLOBAL OVERRIDES INITIALIZATION FOR INTERNAL TESTS ONLY
-        self.U_value = 4.0
+        self.U_value = U
         self.absorbance = 0.3
         self.reflectivity = 0.7
         self.transmittance = 0.0
@@ -72,7 +74,9 @@ class Construction:
 
     def AddLayer(self, material: OpaqueConstructionMaterial):
         self.materials.append(material)
-
+        self.thickness += material.thickness
+        # TODO
+        # MASS
 
     def SetTestValues(self, U, A, R, T):
         self.U_value = U
@@ -112,6 +116,10 @@ class Construction:
     def GetAverageTransmittance(self):
         # TODO
         return self.transmittance
+
+    @property
+    def Mass(self):
+        return self.thickness * self.area * self.density
 
 
 #====================================#
@@ -226,7 +234,7 @@ class Fresnel:
 
         self.refl()
         self.energy()
-        self.graph()
+
 
     def refl(self):
         ct = math.cos(self.incident_angle)
@@ -275,6 +283,9 @@ class Weather:
     def GetProceduralRadianceObject(self):
         return ProceduralRadiance(self.direct_radiation, self.diffuse_radiation, 0.3, self.altitude, self.azimuth, Vector3d(0, -1, 0))
 
+    def GetExteriorAirHeatCapacity(self):
+        return 1005.0
+
 class WeatherSet:
     def __init__(self):
         self.records = []
@@ -285,6 +296,10 @@ class WeatherSet:
     def GetRecord(self, index) -> Weather:
         return self.records[index]
 
+    @property
+    def Length(self):
+        return len(self.records)
+
 class EnergyReq:
     def __init__(self, heating_load=0, cooling_load=0, passive_heating=0, passive_cooling=0, passive_ventilation=0):
         self.heating_load = heating_load
@@ -294,11 +309,12 @@ class EnergyReq:
         self.passive_ventilation = passive_ventilation
 
 class Strategy:
-    def __init__(self, opening_ratio=1.0, shading_ratio=0.05, expose_interior=False, conditioned_temperature=20.0):
+    def __init__(self, opening_ratio=1.0, shading_ratio=0.05, expose_interior=False, conditioned_temperature=20.0, internal_gain = 1200):
         self.opening_ratio = opening_ratio
         self.shading_ratio = shading_ratio
         self.expose_interior = expose_interior
         self.conditioned_temperature = conditioned_temperature
+        self.interior_internal_gain = internal_gain
 
     def __str__(self):
         # TODO: describe different strategies in strings
@@ -311,7 +327,7 @@ class StrategySet:
     def AddStrategy(self, strategy: Strategy):
         self.strategies.append(strategy)
 
-    def GetStrategy(self, index):
+    def GetStrategy(self, index) -> Strategy:
         return self.strategies[index]
 
     def SetStrategy(self, strategy: Strategy, index):
@@ -342,11 +358,18 @@ class Wintergarden:
         self.opening_ratio = 0.8
         self.opening = self.opening_ratio * self.maximum_opening
         self.constructions = constructions
-        self.pending_heat = 0.0
 
         self.area = 0
         for construction in self.constructions:
             self.area += construction.area
+
+        self.pending_heat = 0.0
+
+        self.temperature = 15.0
+        self.exterior_ventilation_rate = 0.0
+        self.exterior_infiltration_rate = 0.0
+        self.interior_ventilation_rate = 0.0
+        self.interior_infiltration_rate = 0.0
 
     def ApplyStrategy(self, strategy: Strategy):
         self.opening_ratio = strategy.opening_ratio
@@ -355,31 +378,57 @@ class Wintergarden:
     def SetFloorConstruction(self, construction: Construction):
         self.floor_construction = construction
 
+    @property
+    def Mass(self):
+        mass = 0
+        for construction in self.constructions:
+            mass += construction.Mass
+        mass += self.floor_construction.Mass
+        return mass
+
 
 class Interior:
     def __init__(self, weather: Weather, constructions: List[Construction]):
         self.weather = weather
 
-        self.temperature = 20.0
         self.shading_ratio = 0.05
         self.expose_interior = False
 
         self.constructions = constructions
-        self.pending_heat = 0.0
 
         self.area = 0
         for construction in self.constructions:
             self.area += construction.area
+
+        self.pending_heat = 0.0
+
+        self.temperature = 15.0
+        self.exterior_ventilation_rate = 0.0
+        self.wintergarden_ventilation_rate = 0.0
+
+        self.internal_gain = 0.0
 
     def ApplyStrategy(self, strategy: Strategy):
         self.shading_ratio = strategy.shading_ratio
         self.expose_interior = strategy.expose_interior
         if not self.expose_interior:
             self.temperature = strategy.conditioned_temperature
+        self.internal_gain = strategy.interior_internal_gain
+
+    def SetFloorConstruction(self, construction: Construction):
+        self.floor_construction = construction
+
+    @property
+    def Mass(self):
+        mass = 0.0
+        for construction in self.constructions:
+            mass += construction.Mass
+        mass += self.floor_construction.Mass
+        return mass
 
 
 class Model:
-    def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0):
+    def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0, analysis_period = -1):
         self.exterior = exterior
         self.wintergarden = wintergarden
         self.interior = interior
@@ -388,22 +437,42 @@ class Model:
         self.strategyset = strategyset
         self.strategy = strategyset.GetStrategy(0)
         self.hour = starting_hour
+        self.analysis_period = analysis_period
+        self.ready = True
 
     def UpdateModel(self):
+        print(self.hour)
         self.UpdateStrategy()
         self.UpdateWeather()
         self.UpdateSolarGain()
         self.UpdateVentilationLoss()
-        self.UpdateInfiltrationLoss()
+        self.UpdateLatentHeat()
         self.UpdateInternalGain()
         self.UpdateHeatTransfer()
         self.UpdateVentilationRate()
         self.UpdateEnergyRequirements()
 
+        if self.hour >= self.weatherset.Length - 1:
+            self.ready = False
+            return False
+
+        if self.analysis_period != 0:
+            self.analysis_period += -1
+            self.hour += 1
+            self.ready = True
+            return True
+        else:
+            self.ready = False
+            return False
+
+
+
     def UpdateStrategy(self):
-        self.strategy = self.strategyset.GetStrategy(self.hour)
+        # TEST
+        self.strategy = self.strategyset.GetStrategy(0)#self.hour#)
         self.wintergarden.ApplyStrategy(self.strategy)
         self.interior.ApplyStrategy(self.strategy)
+
 
     def UpdateWeather(self):
         self.weather = self.weatherset.GetRecord(self.hour)
@@ -486,25 +555,36 @@ class Model:
             # interior radiation gain from transmitted isotropic radiation
             interior_absorbed_radiation += local_isotropic_radiation * construction.GetAverageTransmittance()
 
+        self.wintergarden.pending_heat += wintergarden_absorbed_radiation
+        self.interior.pending_heat += interior_absorbed_radiation
 
-        print(wintergarden_absorbed_radiation)
-        print(interior_absorbed_radiation)
+        # TEST
+        # print(wintergarden_absorbed_radiation)
+        # print(interior_absorbed_radiation)
 
 
     def UpdateVentilationLoss(self):
-        #TODO
-        pass
 
-    def UpdateInfiltrationLoss(self):
-        #TODO
+        # heat exchange in forms of VENTILATION, and INFILTRATION between the exterior and the wintergarden, between the wintergarden and the interior
+        self.wintergarden.pending_heat += self.weather.GetExteriorAirHeatCapacity() * (- self.wintergarden.temperature + self.exterior.weather.temperature) * (self.wintergarden.exterior_ventilation_rate + self.wintergarden.exterior_infiltration_rate)
+        self.wintergarden.pending_heat += self.weather.GetExteriorAirHeatCapacity() * (- self.wintergarden.temperature + self.interior.temperature) * (self.wintergarden.interior_ventilation_rate + self.wintergarden.interior_infiltration_rate)
+        self.interior.pending_heat += self.weather.GetExteriorAirHeatCapacity() * (self.wintergarden.temperature - self.interior.temperature) * (self.wintergarden.interior_ventilation_rate + self.wintergarden.interior_infiltration_rate)
+
+        # TODO
+        # CONSIDER LATENT HEAT GAIN / PSYCHROMETRIC PROCESSES
+
+    def UpdateLatentHeat(self):
+        # TODO
         pass
 
     def UpdateInternalGain(self):
-        # TODO
-        pass
+        self.interior.pending_heat += self.strategy.interior_internal_gain
+
 
     def UpdateHeatTransfer(self):
-        # TODO
+        print(self.wintergarden.temperature)
+        self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.heat_capacity / self.wintergarden.Mass
+        print(self.wintergarden.temperature)
         pass
 
     def UpdateVentilationRate(self):
@@ -518,44 +598,54 @@ class Model:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ====================================#
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 5)
-north_aperture = Construction(name = "North Facade Window", area = 3)
-screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8)
+
+LCY = open("LCY.txt", "r", encoding = "utf-8")
+weatherset = WeatherSet()
+for line in LCY:
+    line = line.split(",")
+    for i in range(len(line)):
+        line[i] = eval(line[i])
+    weatherset.AddRecord(
+        Weather(
+            line[0],
+            line[1],
+            line[3],
+            line[2],
+            line[4],
+            line[5],
+            line[6],
+            line[7],
+            line[8]
+        )
+    )
+print(weatherset.Length)
+
+
+
+north_wall = Construction(name = "North Facade Exterior Wall", area = 5, thickness = 0.4, density = 2.4, U = 0.3)
+north_aperture = Construction(name = "North Facade Window", area = 3, thickness = 0.02, density = 1.2, U = 1.2)
+interior_floor = Construction(name = "Interior Floor", area = 90, thickness = 0.45, density = 2.4, U = 0.15)
+screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1.4, U = 2.4)
 screen1.SetTestValues(1, 0.1, 0.1, 0.8)
-screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8)
+screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1.2, U = 3)
 screen2.SetTestValues(1, 0.3, 0.3, 0.4) #UART
-inner_screen = Construction(name = "Interior Screen", area = 48, height = 6)
+inner_screen = Construction(name = "Interior Screen", area = 48, height = 6, thickness = 0.1, density = 1.6, U = 1.0)
 inner_screen.SetTestValues(1, 0, 0.9, 0.1)
-wintergarden_floor = Construction(name = "Wintergarden Floor", area = 1.2 * 8)
+wintergarden_floor = Construction(name = "Wintergarden Floor", area = 1.2 * 8, thickness = 0.3, density = 1.8, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.3, 0.7, 0)
 
 
 test_weather = Weather(0, 20, 120, 30, 600, 120, 3, 60, 101204)
-wintergarden = Wintergarden(test_weather, [inner_screen], 1, 2, 1.2)
+wintergarden = Wintergarden(test_weather, [inner_screen], 1200, 2, 1.2)
+
 wintergarden.SetFloorConstruction(wintergarden_floor)
 exterior = Exterior(test_weather, [screen1, screen2])
 interior = Interior(test_weather, [north_wall])
+interior.SetFloorConstruction(interior_floor)
 
-weatherset = WeatherSet()
-weatherset.AddRecord(test_weather)
+
 
 strategy = Strategy()
 strategyset = StrategySet()
@@ -564,7 +654,9 @@ strategyset.AddStrategy(strategy)
 
 test_model = Model(exterior, wintergarden, interior, weatherset, strategyset)
 test_model.UpdateWeather()
-test_model.UpdateSolarGain()
+test_model.UpdateModel()
+while test_model.ready:
+    test_model.UpdateModel()
 '''
 p1 = ProceduralRadiance(600, 100, 0.3, 30, 120, Vector3d(0, -1, 0))
 p1.Run()
