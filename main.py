@@ -1,6 +1,8 @@
 #from Rhino.Geometry import *
 from typing import List
 import math
+import time
+import os
 
 
 class Vector3d:
@@ -66,6 +68,7 @@ class Construction:
         self.density = density
 
         #GLOBAL OVERRIDES INITIALIZATION FOR INTERNAL TESTS ONLY
+        self.heat_capacity = 2000
         self.U_value = U
         self.absorbance = 0.3
         self.reflectivity = 0.7
@@ -124,6 +127,10 @@ class Construction:
     @property
     def HeatExchangeCoeff(self):
         return self.U_value * self.area
+
+    @property
+    def HeatCapacity(self):
+        return self.heat_capacity
 
 #====================================#
 
@@ -289,6 +296,10 @@ class Weather:
     def GetExteriorAirHeatCapacity(self):
         return 1005.0
 
+    def GetAirDensity(self):
+        # EXPERIMENTAL ESTIMATIONS
+        return 1.225
+
 class WeatherSet:
     def __init__(self):
         self.records = []
@@ -306,11 +317,12 @@ class WeatherSet:
 
 
 class Strategy:
-    def __init__(self, opening_ratio=1.0, shading_ratio=0.05, expose_interior=False, conditioned_temperature=20.0, internal_gain = 1200):
+    def __init__(self, opening_ratio=1.0, shading_ratio=0.05, expose_interior=False, heating_threshold = 10.0, cooling_threshold = 35.0, internal_gain = 1200):
         self.opening_ratio = opening_ratio
         self.shading_ratio = shading_ratio
         self.expose_interior = expose_interior
-        self.conditioned_temperature = conditioned_temperature
+        self.heating_threshold = heating_threshold
+        self.cooling_threshold = cooling_threshold
         self.interior_internal_gain = internal_gain
 
     def __str__(self):
@@ -329,10 +341,6 @@ class StrategySet:
 
     def SetStrategy(self, strategy: Strategy, index):
         self.strategies[index] = strategy
-
-    def SetGlobalConditionedTemperature(self, temperature):
-        for strategy in self.strategies:
-            strategy.conditioned_temperature = temperature
 
     # TODO add other useful methods to create strategy sets differently
 
@@ -353,9 +361,8 @@ class Exterior:
         return coeff
 
 class Wintergarden:
-    def __init__(self, weather: Weather, constructions: List[Construction], heat_capacity, maximum_opening, offset):
+    def __init__(self, weather: Weather, constructions: List[Construction], maximum_opening, offset):
         self.weather = weather
-        self.heat_capacity = heat_capacity
         self.maximum_opening = maximum_opening
         self.offset = offset
 
@@ -364,6 +371,7 @@ class Wintergarden:
         self.constructions = constructions
 
         self.area = 0
+        self.height = 8.0
         for construction in self.constructions:
             self.area += construction.area
 
@@ -397,6 +405,14 @@ class Wintergarden:
             coeff += construction.area * construction.HeatExchangeCoeff
         return coeff
 
+    @property
+    def HeatCapacity(self):
+        hc = 0.0
+        for construction in self.constructions:
+            hc += construction.Mass * construction.HeatCapacity
+        hc += self.area * self.height * self.weather.GetAirDensity()
+        return hc
+
 class Interior:
     def __init__(self, weather: Weather, constructions: List[Construction]):
         self.weather = weather
@@ -406,7 +422,9 @@ class Interior:
 
         self.constructions = constructions
 
-        self.area = 0
+        self.area = 0.0
+        self.height = 6.5
+
         for construction in self.constructions:
             self.area += construction.area
 
@@ -416,14 +434,19 @@ class Interior:
         self.exterior_ventilation_rate = 0.0
         self.wintergarden_ventilation_rate = 0.0
 
+
+        self.heating_threshold = 10.0
+        self.cooling_threshold = 35.0
         self.internal_gain = 0.0
 
     def ApplyStrategy(self, strategy: Strategy):
         self.shading_ratio = strategy.shading_ratio
         self.expose_interior = strategy.expose_interior
-        if not self.expose_interior:
-            self.temperature = strategy.conditioned_temperature
+        self.expose_interior = strategy.expose_interior
         self.internal_gain = strategy.interior_internal_gain
+        self.heating_threshold = strategy.heating_threshold
+        self.cooling_threshold = strategy.cooling_threshold
+
 
     def SetFloorConstruction(self, construction: Construction):
         self.floor_construction = construction
@@ -443,6 +466,14 @@ class Interior:
             coeff += construction.area * construction.HeatExchangeCoeff
         return coeff
 
+    @property
+    def HeatCapacity(self):
+        hc = 0.0
+        for construction in self.constructions:
+            hc += construction.Mass * construction.HeatCapacity
+        hc += self.area * self.height * self.weather.GetAirDensity()
+        return hc
+
 class Model:
     def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0, analysis_period = -1):
         self.exterior = exterior
@@ -455,6 +486,7 @@ class Model:
         self.hour = starting_hour
         self.analysis_period = analysis_period
         self.ready = True
+        self.results = SimulationResults()
 
     def UpdateModel(self):
         print(self.hour)
@@ -466,7 +498,7 @@ class Model:
         self.UpdateInternalGain()
         self.UpdateHeatTransfer()
         self.UpdateVentilationRate()
-        self.UpdateEnergyRequirements()
+        self.UpdateResult()
 
         if self.hour >= self.weatherset.Length - 1:
             self.ready = False
@@ -504,23 +536,35 @@ class Model:
         inner_screen_isotropic_radiation = 0.0
         interior_absorbed_radiation = 0.0
 
-        for construction in self.exterior.constructions:
+        # simulation result energy breakdowns
+        wintergarden_radiation_from_anisotropic = 0.0
+        wintergarden_radiation_from_isotropic = 0.0
+
+        interior_radiation_from_anisotropic = 0.0
+        interior_radiation_from_isotropic_south = 0.0
+        interior_radiation_from_isotropic_north = 0.0
+
+        for construction in self.exterior.constructions: # first screen layer
             self.procedural_radiance_object.normal = construction.normal
             self.procedural_radiance_object.Run()
             ani_rad = self.procedural_radiance_object.GetAnisotropicRadiation() * construction.area
             iso_rad = self.procedural_radiance_object.GetIsotropicRadiation() * construction.area
 
             if ani_rad > 0:
-                # ansotropic radiation transmitted into the wintergarden
+                # anisotropic radiation transmitted into the wintergarden
                 ani_rad = construction.GetTransmittance(self.procedural_radiance_object.alpha) * ani_rad
                 # anisotropic radiation absorbed in the fenestrations on the screen
                 wintergarden_absorbed_radiation += construction.GetAbsorbance(self.procedural_radiance_object.alpha) * ani_rad
+                # update to simulation result energy breakdowns
+                wintergarden_radiation_from_anisotropic += construction.GetAbsorbance(self.procedural_radiance_object.alpha) * ani_rad
             else:
                 ani_rad = 0
             # isotropic radiation transmitted into the wintergarden
             iso_rad = construction.GetAverageTransmittance() * iso_rad
             # isotropic radiation absorbed in the fenestrations on the screen
             wintergarden_absorbed_radiation += construction.GetAverageAbsorbance() * iso_rad
+            # update to simulation result energy breakdowns
+            wintergarden_radiation_from_isotropic += construction.GetAverageAbsorbance() * iso_rad
 
             # angle of the global ZAxis and the fenestration normal
             angle = construction.normal.VectorAngle(construction.normal, Vector3d(0, 0, 1))
@@ -534,12 +578,16 @@ class Model:
 
             # anisotropic radiation absorbed by the wintergarden floor
             wintergarden_absorbed_radiation += self.wintergarden.floor_construction.GetAbsorbance(math.pi / 2 - self.procedural_radiance_object.altitude) * ani_rad * wintergarden_floor_viewfactor
+            # update to simulation result energy breakdowns
+            wintergarden_radiation_from_anisotropic += self.wintergarden.floor_construction.GetAbsorbance(math.pi / 2 - self.procedural_radiance_object.altitude) * ani_rad * wintergarden_floor_viewfactor
 
             # anisotropic radiation incident onto inner envelope
             ani_rad = (1 - wintergarden_floor_viewfactor) * ani_rad
 
             # isotropic radiation absorbed by the wintergarden floor
             wintergarden_absorbed_radiation += self.wintergarden.floor_construction.GetAverageAbsorbance() * iso_rad * wintergarden_floor_viewfactor
+            # update to simulation result energy breakdowns
+            wintergarden_radiation_from_isotropic += self.wintergarden.floor_construction.GetAverageAbsorbance() * iso_rad * wintergarden_floor_viewfactor
 
             # isotropic radiation reflected by the wintergarden floor, half of which contributes to isotropic radiation incident onto inner envelope
             iso_rad_bypass = iso_rad * (1 - wintergarden_floor_viewfactor)
@@ -554,7 +602,7 @@ class Model:
             inner_screen_isotropic_radiation += iso_rad
             inner_screen_anisotropic_radiation += ani_rad
 
-        for construction in self.wintergarden.constructions:
+        for construction in self.wintergarden.constructions: # second screen layer
             self.procedural_radiance_object.normal = construction.normal
             self.procedural_radiance_object.Run()
 
@@ -563,16 +611,61 @@ class Model:
 
             # interior radiation gain from transmitted anisotropic radiation
             interior_absorbed_radiation += local_anisotropic_radiation * construction.GetTransmittance(self.procedural_radiance_object.alpha)
+            # update to simulation result energy breakdowns
+            interior_radiation_from_anisotropic += local_anisotropic_radiation * construction.GetTransmittance(self.procedural_radiance_object.alpha)
 
-            # wintergarden radiation gain from inner screen reflection
+            # interior radiation absorbed from fabric material absorbance, isotropic sector
+            interior_absorbed_radiation += local_isotropic_radiation * construction.GetAverageAbsorbance()
+            # update to simulation result energy breakdowns
+            interior_radiation_from_isotropic_south += local_isotropic_radiation * construction.GetAverageAbsorbance()
+            # interior radiation absorbed from fabric material absorbance, anisotropic sector
+            interior_absorbed_radiation += local_anisotropic_radiation * construction.GetAbsorbance(self.procedural_radiance_object.alpha)
+            # update to simulation result energy breakdowns
+            interior_radiation_from_anisotropic += local_anisotropic_radiation * construction.GetAbsorbance(self.procedural_radiance_object.alpha)
+
+            # wintergarden radiation gain from inner screen reflection, isotropic sector
             wintergarden_absorbed_radiation += self.wintergarden.offset / math.pi / 2 * (local_isotropic_radiation * construction.GetAverageReflectivity())
+            # update to simulation result energy breakdowns
+            wintergarden_radiation_from_isotropic += self.wintergarden.offset / math.pi / 2 * (local_isotropic_radiation * construction.GetAverageReflectivity())
+
+            # wintergarden radiation gain from inner screen reflection, anisotropic sector
             wintergarden_absorbed_radiation += self.wintergarden.offset / math.pi / 2 * (local_anisotropic_radiation * construction.GetReflectivity(self.procedural_radiance_object.alpha))
+            # update to simulation result energy breakdowns
+            wintergarden_radiation_from_anisotropic += self.wintergarden.offset / math.pi / 2 * (local_anisotropic_radiation * construction.GetReflectivity(self.procedural_radiance_object.alpha))
 
             # interior radiation gain from transmitted isotropic radiation
             interior_absorbed_radiation += local_isotropic_radiation * construction.GetAverageTransmittance()
+            # update to simulation result energy breakdowns
+            interior_radiation_from_isotropic_south += local_isotropic_radiation * construction.GetAverageTransmittance()
+
+
+        for construction in self.interior.constructions: # north facing facade
+            self.procedural_radiance_object.normal = construction.normal
+            self.procedural_radiance_object.Run()
+
+            iso_rad = self.procedural_radiance_object.GetIsotropicRadiation() * construction.area
+
+            # isotropic radiation transmitted into the interior
+            interior_absorbed_radiation += iso_rad * construction.GetAverageTransmittance()
+            # update to simulation result energy breakdowns
+            interior_radiation_from_isotropic_north += iso_rad * construction.GetAverageTransmittance()
+
+            # isotropic radiation absorbed by the fabric
+            interior_absorbed_radiation += iso_rad * construction.GetAverageAbsorbance()
+            # update to simulation result energy breakdowns
+            interior_radiation_from_isotropic_north += iso_rad * construction.GetAverageAbsorbance()
+
 
         self.wintergarden.pending_heat += wintergarden_absorbed_radiation
         self.interior.pending_heat += interior_absorbed_radiation
+
+        self.results.wintergarden_radiation_from_anisotropic.append(wintergarden_radiation_from_anisotropic)
+        self.results.wintergarden_radiation_from_isotropic.append(wintergarden_radiation_from_isotropic)
+        self.results.interior_radiation_from_isotropic_north.append(interior_radiation_from_isotropic_north)
+        self.results.interior_radiation_from_isotropic_south.append(interior_radiation_from_isotropic_south)
+        self.results.interior_radiation_from_anisotropic.append(interior_radiation_from_anisotropic)
+
+
 
         # TEST
         # print(wintergarden_absorbed_radiation)
@@ -606,7 +699,7 @@ class Model:
 
         # convert pending heat into temperature differences
 
-        self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.heat_capacity / self.wintergarden.Mass
+        self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.HeatCapacity / self.wintergarden.Mass
         self.wintergarden.pending_heat = 0
 
         print(wintergarden.temperature)
@@ -619,9 +712,13 @@ class Model:
         #TODO
         pass
 
-    def UpdateEnergyRequirements(self):
-        #TODO
-        pass
+
+    def UpdateResult(self):
+        self.results.exterior_temperature.append(self.weather.temperature)
+        self.results.interior_temperature.append(self.interior.temperature)
+        self.results.wintergarden_temperature.append(self.wintergarden.temperature)
+
+
 
 
 
@@ -630,12 +727,67 @@ class Model:
 class SimulationResults:
     def __init__(self):
 
-        self.heating_load = []
+        self.exterior_temperature = []
+        self.wintergarden_temperature = []
+        self.interior_temperature = []
 
+        self.wintergarden_ventilation_rate = []
+
+        self.wintergarden_radiation_from_anisotropic = []
+        self.wintergarden_radiation_from_isotropic = []
+
+        self.interior_radiation_from_anisotropic = []
+        self.interior_radiation_from_isotropic_south = []
+        self.interior_radiation_from_isotropic_north = []
+
+
+
+
+
+
+        self.heating_load = []
         self.cooling_load = []
         self.passive_heating = []
         self.passive_cooling = []
         self.passive_ventilation = []
+
+    def GroupByDailyAverage(self, result: List[float]):
+        if len(result) == 8760:
+            grouped = []
+            for i in range(365):
+                daily_result = result[i: i + 24]
+                daily_total = 0.0
+                for hourly_result in daily_result:
+                    daily_total += hourly_result
+                daily_total = daily_total / 24
+                grouped.append(daily_total)
+            return grouped
+        return -1
+
+    def WriteToFile(self):
+        timestamp = time.time() * 100
+        os.mkdir(str(timestamp))
+        radiation_name = str(timestamp) + "/radiation.txt"
+        radiation_file = open(radiation_name, "w")
+        for i in range(8760):
+            radiation_file.write(
+                str(self.wintergarden_radiation_from_anisotropic[i]) + "," +
+                str(self.wintergarden_radiation_from_isotropic[i]) + "," +
+                str(self.interior_radiation_from_anisotropic[i]) + "," +
+                str(self.interior_radiation_from_isotropic_south[i]) + "," +
+                str(self.interior_radiation_from_isotropic_north[i]) + "\n"
+            )
+        radiation_file.close()
+        """
+        summary_name = str(timestamp) + "/summary.txt"
+        summary_file = open(summary_name, "w")
+
+        summary_file.close()
+        """
+
+
+
+
 
 
 
@@ -683,7 +835,7 @@ wintergarden_floor.SetTestValues(1, 0.3, 0.7, 0)
 
 
 test_weather = Weather(0, 20, 120, 30, 600, 120, 3, 60, 101204)
-wintergarden = Wintergarden(test_weather, [inner_screen], 1200, 2, 1.2)
+wintergarden = Wintergarden(test_weather, [inner_screen], 2, 1.2)
 
 wintergarden.SetFloorConstruction(wintergarden_floor)
 exterior = Exterior(test_weather, [screen1, screen2])
@@ -702,6 +854,7 @@ test_model.UpdateWeather()
 test_model.UpdateModel()
 while test_model.ready:
     test_model.UpdateModel()
+test_model.results.WriteToFile()
 '''
 p1 = ProceduralRadiance(600, 100, 0.3, 30, 120, Vector3d(0, -1, 0))
 p1.Run()
