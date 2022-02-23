@@ -121,6 +121,9 @@ class Construction:
     def Mass(self):
         return self.thickness * self.area * self.density
 
+    @property
+    def HeatExchangeCoeff(self):
+        return self.U_value * self.area
 
 #====================================#
 
@@ -300,13 +303,7 @@ class WeatherSet:
     def Length(self):
         return len(self.records)
 
-class EnergyReq:
-    def __init__(self, heating_load=0, cooling_load=0, passive_heating=0, passive_cooling=0, passive_ventilation=0):
-        self.heating_load = heating_load
-        self.cooling_load = cooling_load
-        self.passive_heating = passive_heating
-        self.passive_cooling = passive_cooling
-        self.passive_ventilation = passive_ventilation
+
 
 class Strategy:
     def __init__(self, opening_ratio=1.0, shading_ratio=0.05, expose_interior=False, conditioned_temperature=20.0, internal_gain = 1200):
@@ -348,6 +345,13 @@ class Exterior:
         for construction in self.constructions:
             self.area += construction.area
 
+    @property
+    def HeatExchangeCoeff(self):
+        coeff = 0.0
+        for construction in self.constructions:
+            coeff += construction.area * construction.HeatExchangeCoeff
+        return coeff
+
 class Wintergarden:
     def __init__(self, weather: Weather, constructions: List[Construction], heat_capacity, maximum_opening, offset):
         self.weather = weather
@@ -386,6 +390,12 @@ class Wintergarden:
         mass += self.floor_construction.Mass
         return mass
 
+    @property
+    def HeatExchangeCoeff(self):
+        coeff = 0.0
+        for construction in self.constructions:
+            coeff += construction.area * construction.HeatExchangeCoeff
+        return coeff
 
 class Interior:
     def __init__(self, weather: Weather, constructions: List[Construction]):
@@ -426,6 +436,12 @@ class Interior:
         mass += self.floor_construction.Mass
         return mass
 
+    @property
+    def HeatExchangeCoeff(self):
+        coeff = 0.0
+        for construction in self.constructions:
+            coeff += construction.area * construction.HeatExchangeCoeff
+        return coeff
 
 class Model:
     def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0, analysis_period = -1):
@@ -582,10 +598,22 @@ class Model:
 
 
     def UpdateHeatTransfer(self):
-        print(self.wintergarden.temperature)
+        # conduction with exterior
+        self.wintergarden.pending_heat += self.exterior.HeatExchangeCoeff * (self.exterior.weather.temperature - self.wintergarden.temperature)
+
+        # conduction with interior
+        self.wintergarden.pending_heat += self.wintergarden.HeatExchangeCoeff * (self.interior.temperature - self.wintergarden.temperature)
+
+        # convert pending heat into temperature differences
+
         self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.heat_capacity / self.wintergarden.Mass
-        print(self.wintergarden.temperature)
-        pass
+        self.wintergarden.pending_heat = 0
+
+        print(wintergarden.temperature)
+
+        # TODO
+        # add conduction heat exchange between other environments involved
+
 
     def UpdateVentilationRate(self):
         #TODO
@@ -599,8 +627,25 @@ class Model:
 
 
 # ====================================#
+class SimulationResults:
+    def __init__(self):
+
+        self.heating_load = []
+
+        self.cooling_load = []
+        self.passive_heating = []
+        self.passive_cooling = []
+        self.passive_ventilation = []
 
 
+
+
+
+
+
+
+
+# ====================================#
 LCY = open("LCY.txt", "r", encoding = "utf-8")
 weatherset = WeatherSet()
 for line in LCY:
