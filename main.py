@@ -774,8 +774,8 @@ class SimulationResults:
 
     def WriteToFile(self):
         timestamp = time.time() * 100
-        os.mkdir(str(timestamp))
-        radiation_name = str(timestamp) + "/radiation.txt"
+        os.mkdir("results/" + str(timestamp))
+        radiation_name = "results/" + str(timestamp) + "/radiation.txt"
         radiation_file = open(radiation_name, "w")
         for i in range(8760):
             radiation_file.write(
@@ -790,7 +790,7 @@ class SimulationResults:
 
 
 
-        summary_name = str(timestamp) + "/summary.txt"
+        summary_name = "results/" + str(timestamp) + "/summary.txt"
         summary_file = open(summary_name, "w")
         grouped_temperature = self.GroupByDailyAverage(self.exterior_temperature)
         grouped_wintergarden_temperature = self.GroupByDailyAverage(self.wintergarden_temperature)
