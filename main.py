@@ -68,7 +68,7 @@ class Construction:
         self.density = density
 
         #GLOBAL OVERRIDES INITIALIZATION FOR INTERNAL TESTS ONLY
-        self.heat_capacity = 2000
+        self.heat_capacity = 500
         self.U_value = U
         self.absorbance = 0.3
         self.reflectivity = 0.7
@@ -406,7 +406,7 @@ class Wintergarden:
         return coeff
 
     @property
-    def HeatCapacity(self):
+    def TotalHeatCapacity(self):
         hc = 0.0
         for construction in self.constructions:
             hc += construction.Mass * construction.HeatCapacity
@@ -467,7 +467,7 @@ class Interior:
         return coeff
 
     @property
-    def HeatCapacity(self):
+    def TotalHeatCapacity(self):
         hc = 0.0
         for construction in self.constructions:
             hc += construction.Mass * construction.HeatCapacity
@@ -489,7 +489,6 @@ class Model:
         self.results = SimulationResults()
 
     def UpdateModel(self):
-        print(self.hour)
         self.UpdateStrategy()
         self.UpdateWeather()
         self.UpdateSolarGain()
@@ -499,6 +498,9 @@ class Model:
         self.UpdateHeatTransfer()
         self.UpdateVentilationRate()
         self.UpdateResult()
+
+        if self.interior.temperature <= 15:
+            print(str(self.hour) + " " + str(self.interior.temperature) + " " +str(self.wintergarden.temperature) + " " +str(self.exterior.weather.temperature))
 
         if self.hour >= self.weatherset.Length - 1:
             self.ready = False
@@ -671,7 +673,6 @@ class Model:
         # print(wintergarden_absorbed_radiation)
         # print(interior_absorbed_radiation)
 
-
     def UpdateVentilationLoss(self):
 
         # heat exchange in forms of VENTILATION, and INFILTRATION between the exterior and the wintergarden, between the wintergarden and the interior
@@ -691,21 +692,28 @@ class Model:
 
 
     def UpdateHeatTransfer(self):
+
+        # wintergarden conduction
         # conduction with exterior
         self.wintergarden.pending_heat += self.exterior.HeatExchangeCoeff * (self.exterior.weather.temperature - self.wintergarden.temperature)
 
         # conduction with interior
         self.wintergarden.pending_heat += self.wintergarden.HeatExchangeCoeff * (self.interior.temperature - self.wintergarden.temperature)
+        self.interior.pending_heat += self.wintergarden.HeatExchangeCoeff * (- self.interior.temperature + self.wintergarden.temperature)
 
-        # convert pending heat into temperature differences
-
-        self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.HeatCapacity / self.wintergarden.Mass
+        # convert wintergarden pending heat into temperature differences
+        self.wintergarden.temperature += self.wintergarden.pending_heat / self.wintergarden.TotalHeatCapacity
         self.wintergarden.pending_heat = 0
 
-        print(wintergarden.temperature)
+        # interior conduction
+        self.interior.pending_heat += self.interior.HeatExchangeCoeff * (self.exterior.weather.temperature - self.interior.temperature)
+
+        # convert interior pending heat into temperature differences
+        self.interior.temperature += self.interior.pending_heat / self.interior.TotalHeatCapacity
 
         # TODO
         # add conduction heat exchange between other environments involved
+
 
 
     def UpdateVentilationRate(self):
@@ -755,7 +763,7 @@ class SimulationResults:
         if len(result) == 8760:
             grouped = []
             for i in range(365):
-                daily_result = result[i: i + 24]
+                daily_result = result[i * 24: i * 24 + 24]
                 daily_total = 0.0
                 for hourly_result in daily_result:
                     daily_total += hourly_result
@@ -778,12 +786,23 @@ class SimulationResults:
                 str(self.interior_radiation_from_isotropic_north[i]) + "\n"
             )
         radiation_file.close()
-        """
+
+
+
+
         summary_name = str(timestamp) + "/summary.txt"
         summary_file = open(summary_name, "w")
-
+        grouped_temperature = self.GroupByDailyAverage(self.exterior_temperature)
+        grouped_wintergarden_temperature = self.GroupByDailyAverage(self.wintergarden_temperature)
+        grouped_interior_temperature = self.GroupByDailyAverage(self.interior_temperature)
+        for i in range(365):
+            summary_file.write(
+                str(grouped_temperature[i]) + "," +
+                str(grouped_wintergarden_temperature[i]) + "," +
+                str(grouped_interior_temperature[i]) + "\n"
+            )
         summary_file.close()
-        """
+
 
 
 
@@ -817,20 +836,19 @@ for line in LCY:
             line[8]
         )
     )
-print(weatherset.Length)
 
 
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 5, thickness = 0.4, density = 2.4, U = 0.3)
-north_aperture = Construction(name = "North Facade Window", area = 3, thickness = 0.02, density = 1.2, U = 1.2)
-interior_floor = Construction(name = "Interior Floor", area = 90, thickness = 0.45, density = 2.4, U = 0.15)
-screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1.4, U = 2.4)
-screen1.SetTestValues(1, 0.1, 0.1, 0.8)
-screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1.2, U = 3)
-screen2.SetTestValues(1, 0.3, 0.3, 0.4) #UART
-inner_screen = Construction(name = "Interior Screen", area = 48, height = 6, thickness = 0.1, density = 1.6, U = 1.0)
-inner_screen.SetTestValues(1, 0, 0.9, 0.1)
-wintergarden_floor = Construction(name = "Wintergarden Floor", area = 1.2 * 8, thickness = 0.3, density = 1.8, U = 1.8)
+north_wall = Construction(name = "North Facade Exterior Wall", area = 5, thickness = 0.4, density = 2400, U = 0.3)
+north_aperture = Construction(name = "North Facade Window", area = 3, thickness = 0.02, density = 1200, U = 1.2)
+interior_floor = Construction(name = "Interior Floor", area = 90, thickness = 0.6, density = 2400, U = 0.15)
+screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 4)
+screen1.SetTestValues(1, 0.02, 0.06, 0.92)
+screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 4)
+screen2.SetTestValues(1, 0.02, 0.02, 0.96) #UART
+inner_screen = Construction(name = "Interior Screen", area = 48, height = 6, thickness = 0.1, density = 1600, U = 1.2)
+inner_screen.SetTestValues(1, 0.1, 0.15, 0.75)
+wintergarden_floor = Construction(name = "Wintergarden Floor", area = 1.2 * 8, thickness = 0.3, density = 1800, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.3, 0.7, 0)
 
 
