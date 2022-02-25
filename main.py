@@ -294,7 +294,7 @@ class Weather:
         return ProceduralRadiance(self.direct_radiation, self.diffuse_radiation, 0.3, self.altitude, self.azimuth, Vector3d(0, -1, 0))
 
     def GetExteriorAirHeatCapacity(self):
-        return 1005.0
+        return 1005.0 / 3600
 
     def GetAirDensity(self):
         # EXPERIMENTAL ESTIMATIONS
@@ -423,7 +423,7 @@ class Wintergarden:
         for construction in self.constructions:
             hc += construction.Mass * construction.HeatCapacity
         hc += self.shading_construction.Mass * self.shading_construction.heat_capacity
-        hc += self.FaceArea * self.offset * self.weather.GetAirDensity()
+        hc += self.FaceArea * self.offset * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity()
         return hc
 
     @property
@@ -433,6 +433,13 @@ class Wintergarden:
     @property
     def StackEffectFlowRate(self):
         return 0.65 * self.opening * math.sqrt(abs(2 * 9.807 * self.height / 2 * (self.temperature - self.weather.temperature) / (self.temperature + 273))) * 3600
+
+    def GetVentilationHeatExchange(self, temperature, flow):
+
+        volume = self.FaceArea * self.offset
+        total_heat = volume * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * (self.temperature - temperature)
+        volume_heat = total_heat / (volume + flow) * volume
+        return volume_heat - total_heat
 
 
 class Interior:
@@ -506,7 +513,7 @@ class Interior:
         for construction in self.constructions:
             hc += construction.Mass * construction.HeatCapacity
         hc += self.floor_construction.Mass * self.floor_construction.heat_capacity
-        hc += self.FaceArea * self.height * self.weather.GetAirDensity()
+        hc += self.FaceArea * self.height * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity()
         return hc
 
     @property
@@ -516,6 +523,13 @@ class Interior:
     @property
     def StackEffectFlowRate(self):
         return 0.65 * self.opening * math.sqrt(abs(2 * 9.807 * self.height / 2 * (self.temperature - self.weather.temperature) / (self.temperature + 273))) * 3600
+
+    def GetVentilationHeatExchange(self, temperature, flow):
+
+        volume = self.FaceArea * self.offset
+        total_heat = volume * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * (self.temperature - temperature)
+        volume_heat = total_heat / (volume + flow) * volume
+        return volume_heat - total_heat
 
 class Model:
     def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0, analysis_period = -1):
@@ -737,7 +751,9 @@ class Model:
 
 
     def UpdateVentilationLoss(self):
-        return
+
+
+
         # TODO REWORK ON THIS
         self.wintergarden.exterior_ventilation_rate = self.wintergarden.StackEffectFlowRate
         self.wintergarden.interior_ventilation_rate = self.interior.StackEffectFlowRate
@@ -748,6 +764,29 @@ class Model:
         self.wintergarden.interior_infiltration_rate = 0.02 * 3600
 
 
+        ventilation_heat_exchange_ew = self.wintergarden.GetVentilationHeatExchange(self.weather.temperature, self.wintergarden.exterior_ventilation_rate)
+        ventilation_heat_exchange_wi = self.interior.GetVentilationHeatExchange(self.wintergarden.temperature, self.wintergarden.interior_ventilation_rate)
+        ventilation_heat_exchange_ie = - self.interior.GetVentilationHeatExchange(self.weather.temperature, self.interior.exterior_ventilation_rate)
+
+        infiltration_heat_exchange_ew = self.wintergarden.GetVentilationHeatExchange(self.weather.temperature, self.wintergarden.exterior_infiltration_rate)
+        infiltration_heat_exchange_wi = self.interior.GetVentilationHeatExchange(self.wintergarden.temperature, self.wintergarden.interior_infiltration_rate)
+        infiltration_heat_exchange_ie = - self.interior.GetVentilationHeatExchange(self.weather.temperature, self.interior.exterior_infiltration_rate)
+
+
+        self.wintergarden.pending_heat += ventilation_heat_exchange_ew - ventilation_heat_exchange_wi + infiltration_heat_exchange_ew - infiltration_heat_exchange_wi
+        self.interior.pending_heat += ventilation_heat_exchange_wi - ventilation_heat_exchange_ie + infiltration_heat_exchange_wi - infiltration_heat_exchange_ie
+
+        self.results.ventilation_heat_exchange_ew.append(ventilation_heat_exchange_ew)
+        self.results.ventilation_heat_exchange_wi.append(ventilation_heat_exchange_wi)
+        self.results.ventilation_heat_exchange_ie.append(ventilation_heat_exchange_ie)
+
+        self.results.infiltration_heat_exchange_ew.append(infiltration_heat_exchange_ew)
+        self.results.infiltration_heat_exchange_wi.append(infiltration_heat_exchange_wi)
+        self.results.infiltration_heat_exchange_ie.append(infiltration_heat_exchange_ie)
+
+        return
+
+        # 下面是地狱
         # heat exchange in forms of VENTILATION, and INFILTRATION between the exterior and the wintergarden, between the wintergarden and the interior
         ventilation_heat_exchange_ew = self.wintergarden.exterior_ventilation_rate * self.exterior.weather.GetAirDensity() * (self.weather.temperature - self.wintergarden.temperature)
         ventilation_heat_exchange_wi = self.wintergarden.interior_ventilation_rate * self.exterior.weather.GetAirDensity() * (self.wintergarden.temperature - self.interior.temperature)
@@ -805,6 +844,7 @@ class Model:
         self.interior.temperature += self.interior.pending_heat / self.interior.TotalHeatCapacity
 
         # heating and cooling
+        """
         if self.interior.temperature < self.interior.heating_threshold:
             self.results.heating_load.append(self.interior.TotalHeatCapacity * (self.interior.heating_goal - self.interior.temperature))
             self.interior.temperature = self.interior.heating_goal
@@ -815,7 +855,7 @@ class Model:
             self.interior.temperature = self.interior.cooling_goal
         else:
             self.results.cooling_load.append(0)
-
+        """
 
 
         self.interior.pending_heat = 0
@@ -1001,6 +1041,8 @@ interior.SetFloorConstruction(interior_floor)
 
 strategy = Strategy()
 strategy.shading_ratio = 0.2
+strategy.opening_ratio = 0.05
+strategy.interior_opening_ratio = 0.05
 strategyset = StrategySet()
 strategyset.AddStrategy(strategy)
 
