@@ -815,6 +815,9 @@ class Model:
             self.interior.temperature = self.interior.cooling_goal
         else:
             self.results.cooling_load.append(0)
+
+
+
         self.interior.pending_heat = 0
 
     def UpdateVentilationRate(self):
@@ -912,7 +915,15 @@ class SimulationResults:
             )
         radiation_file.close()
 
-
+        temperature_name = "results/" + str(timestamp) + "/temperature.txt"
+        temperature_file = open(temperature_name, "w")
+        for i in range(8760):
+            temperature_file.write(
+                str(self.exterior_temperature[i]) + "," +
+                str(self.wintergarden_temperature[i]) + "," +
+                str(self.interior_temperature[i]) + "\n"
+            )
+        temperature_file.close()
 
 
         summary_name = "results/" + str(timestamp) + "/summary.txt"
@@ -963,16 +974,16 @@ for line in LCY:
     )
 
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 48, thickness = 0.3, density = 2400, U = 0.3)
+north_wall = Construction(name = "North Facade Exterior Wall", area = 48, thickness = 0.3, density = 2400, U = 10)#TEST UVALUE
 north_aperture = Construction(name = "North Facade Window", area = 16, thickness = 0.02, density = 1200, U = 2.5)
 interior_floor = Construction(name = "Interior Floor", area = 120, thickness = 0.65, density = 3000, U = 0.15)
-screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 3)
+screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 30)#TTTT
 screen1.SetTestValues(1, 0.02, 0.06, 0.92)
-screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 3)
+screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 16)#TTTT
 screen2.SetTestValues(1, 0.02, 0.02, 0.96) #UART
-shading = Construction(name = "Shading", area = 20, thickness = 0.04, density = 2400)
+shading = Construction(name = "Shading", area = 20, thickness = 0.25, density = 2400)
 shading.SetTestValues(1, 0.6, 0.4, 0.0)
-inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.01, density = 1600, U = 3)
+inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.01, density = 1600, U = 8)
 inner_screen.SetTestValues(1, 0.02, 0.43, 0.55)
 wintergarden_floor = Construction(name = "Wintergarden Floor", area = 12, thickness = 0.5, density = 2400, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.45, 0.55, 0)
@@ -989,6 +1000,7 @@ interior.SetFloorConstruction(interior_floor)
 
 
 strategy = Strategy()
+strategy.shading_ratio = 0.2
 strategyset = StrategySet()
 strategyset.AddStrategy(strategy)
 
@@ -1001,7 +1013,7 @@ while test_model.ready:
 print(test_model.results.Sum(test_model.results.heating_load))
 
 print(test_model.results.Sum(test_model.results.cooling_load))
-#test_model.results.WriteToFile()
+test_model.results.WriteToFile()
 '''
 p1 = ProceduralRadiance(600, 100, 0.3, 30, 120, Vector3d(0, -1, 0))
 p1.Run()
