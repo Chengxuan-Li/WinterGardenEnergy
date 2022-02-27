@@ -68,7 +68,7 @@ class Construction:
         self.density = density
 
         #GLOBAL OVERRIDES INITIALIZATION FOR INTERNAL TESTS ONLY
-        self.heat_capacity = 1200 / 3600
+        self.heat_capacity = 600 / 3600
         self.U_value = U
         self.absorbance = 0.3
         self.reflectivity = 0.7
@@ -438,7 +438,9 @@ class Wintergarden:
 
         volume = self.FaceArea * self.offset
         total_heat = volume * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * (self.temperature - temperature)
-        volume_heat = total_heat / (volume + flow) * volume
+        total_heat = self.TotalHeatCapacity * (self.temperature - temperature)
+        #volume_heat = total_heat / (volume + flow) * volume
+        volume_heat = self.TotalHeatCapacity / (self.TotalHeatCapacity + self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * flow) * total_heat
         return volume_heat - total_heat
 
 
@@ -528,7 +530,8 @@ class Interior:
 
         volume = self.FaceArea * self.offset
         total_heat = volume * self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * (self.temperature - temperature)
-        volume_heat = total_heat / (volume + flow) * volume
+        total_heat = self.TotalHeatCapacity * (self.temperature - temperature)
+        volume_heat = self.TotalHeatCapacity / (self.TotalHeatCapacity + self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * flow) * total_heat
         return volume_heat - total_heat
 
 class Model:
@@ -1014,18 +1017,21 @@ for line in LCY:
     )
 
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 48, thickness = 0.3, density = 2400, U = 10)#TEST UVALUE
-north_aperture = Construction(name = "North Facade Window", area = 16, thickness = 0.02, density = 1200, U = 2.5)
-interior_floor = Construction(name = "Interior Floor", area = 120, thickness = 0.65, density = 3000, U = 0.15)
+north_wall = Construction(name = "North Facade Exterior Wall", area = 48, thickness = 0.3, density = 2400, U = 0.3)#TEST UVALUE
+#我是傻逼我把北边整个墙当窗使了难怪天光辐射能这么多
+north_wall.SetTestValues(0.3, 0.25, 0.75, 0)
+north_aperture = Construction(name = "North Facade Window", area = 16, thickness = 0.02, density = 1200, U = 25)
+north_aperture.SetTestValues(250, 0.12, 0.38, 0.5)
+interior_floor = Construction(name = "Interior Floor", area = 100, thickness = 0.25, density = 1200, U = 0.15)
 screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 30)#TTTT
-screen1.SetTestValues(1, 0.02, 0.06, 0.92)
-screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 16)#TTTT
-screen2.SetTestValues(1, 0.02, 0.02, 0.96) #UART
-shading = Construction(name = "Shading", area = 20, thickness = 0.25, density = 2400)
-shading.SetTestValues(1, 0.6, 0.4, 0.0)
-inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.01, density = 1600, U = 8)
-inner_screen.SetTestValues(1, 0.02, 0.43, 0.55)
-wintergarden_floor = Construction(name = "Wintergarden Floor", area = 12, thickness = 0.5, density = 2400, U = 1.8)
+screen1.SetTestValues(1, 0.05, 0.45, 0.5)
+screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 30)#TTTT
+screen2.SetTestValues(1, 0.05, 0.45, 0.5) #UART
+shading = Construction(name = "Shading", area = 40, thickness = 0.05, density = 2400)
+shading.SetTestValues(1, 0.25, 0.75, 0.0)
+inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.01, density = 1600, U = 30)
+inner_screen.SetTestValues(1, 0.12, 0.53, 0.35)
+wintergarden_floor = Construction(name = "Wintergarden Floor", area = 12, thickness = 0.2, density = 800, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.45, 0.55, 0)
 
 
@@ -1035,14 +1041,14 @@ wintergarden = Wintergarden(test_weather, [inner_screen], 8 , 1.20)
 wintergarden.SetFloorConstruction(wintergarden_floor)
 wintergarden.SetShadingConstruction(shading)
 exterior = Exterior(test_weather, [screen1, screen2])
-interior = Interior(test_weather, [north_wall], 16, 25.0)
+interior = Interior(test_weather, [north_aperture, north_wall], 16, 25.0)
 interior.SetFloorConstruction(interior_floor)
 
 
 strategy = Strategy()
-strategy.shading_ratio = 0.2
-strategy.opening_ratio = 0.05
-strategy.interior_opening_ratio = 0.05
+strategy.shading_ratio = 0.5
+strategy.opening_ratio = 0.4
+strategy.interior_opening_ratio = 0.2
 strategyset = StrategySet()
 strategyset.AddStrategy(strategy)
 
@@ -1055,7 +1061,7 @@ while test_model.ready:
 print(test_model.results.Sum(test_model.results.heating_load))
 
 print(test_model.results.Sum(test_model.results.cooling_load))
-test_model.results.WriteToFile()
+#test_model.results.WriteToFile()
 '''
 p1 = ProceduralRadiance(600, 100, 0.3, 30, 120, Vector3d(0, -1, 0))
 p1.Run()
