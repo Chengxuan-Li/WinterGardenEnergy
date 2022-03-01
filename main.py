@@ -317,7 +317,7 @@ class WeatherSet:
 
 
 class Strategy:
-    def __init__(self, opening_ratio=1.0, interior_opening_ratio=0.02, shading_ratio=0.05, expose_interior=False, heating_threshold = 12.0, heating_goal = 18.0, cooling_goal = 25.0, cooling_threshold = 28.0, internal_gain = 0.3):
+    def __init__(self, opening_ratio=1.0, interior_opening_ratio=0.02, shading_ratio=0.05, expose_interior=False, heating_threshold = 10.0, heating_goal = 15.0, cooling_goal = 25.0, cooling_threshold = 32.0, internal_gain = 0.3):
         self.opening_ratio = opening_ratio
         self.interior_opening_ratio = interior_opening_ratio
         self.shading_ratio = shading_ratio
@@ -533,6 +533,10 @@ class Interior:
         total_heat = self.TotalHeatCapacity * (self.temperature - temperature)
         volume_heat = self.TotalHeatCapacity / (self.TotalHeatCapacity + self.weather.GetAirDensity() * self.weather.GetExteriorAirHeatCapacity() * flow) * total_heat
         return volume_heat - total_heat
+
+
+
+
 
 class Model:
     def __init__(self, exterior: Exterior, wintergarden: Wintergarden, interior: Interior, weatherset: WeatherSet, strategyset: StrategySet, starting_hour = 0, analysis_period = -1):
@@ -760,8 +764,8 @@ class Model:
         # TODO REWORK ON THIS
         self.wintergarden.exterior_ventilation_rate = self.wintergarden.StackEffectFlowRate
         self.wintergarden.interior_ventilation_rate = self.interior.StackEffectFlowRate
-        self.wintergarden.exterior_infiltration_rate = (self.weather.wind_speed * 0.02 + 0.006) * 3600
-        self.wintergarden.interior_infiltration_rate = (self.weather.wind_speed * 0.01 + 0.003) * 3600
+        self.wintergarden.exterior_infiltration_rate = (self.weather.wind_speed * 0.002 + 0.006) * 3600
+        self.wintergarden.interior_infiltration_rate = (self.weather.wind_speed * 0.001 + 0.003) * 3600
         self.interior.exterior_infiltration_rate = 0.012 * 3600
         self.interior.wintergarden_infiltration_rate = 0.02 * 3600
         self.wintergarden.interior_infiltration_rate = 0.02 * 3600
@@ -847,7 +851,7 @@ class Model:
         self.interior.temperature += self.interior.pending_heat / self.interior.TotalHeatCapacity
 
         # heating and cooling
-        """
+
         if self.interior.temperature < self.interior.heating_threshold:
             self.results.heating_load.append(self.interior.TotalHeatCapacity * (self.interior.heating_goal - self.interior.temperature))
             self.interior.temperature = self.interior.heating_goal
@@ -858,7 +862,6 @@ class Model:
             self.interior.temperature = self.interior.cooling_goal
         else:
             self.results.cooling_load.append(0)
-        """
 
 
         self.interior.pending_heat = 0
@@ -1017,21 +1020,21 @@ for line in LCY:
     )
 
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 48, thickness = 0.3, density = 2400, U = 0.3)#TEST UVALUE
+north_wall = Construction(name = "North Facade Exterior Wall", area = 16, thickness = 0.4, density = 4800, U = 0.2)#TEST UVALUE
 #我是傻逼我把北边整个墙当窗使了难怪天光辐射能这么多
 north_wall.SetTestValues(0.3, 0.25, 0.75, 0)
-north_aperture = Construction(name = "North Facade Window", area = 16, thickness = 0.02, density = 1200, U = 25)
+north_aperture = Construction(name = "North Facade Window", area = 5, thickness = 0.1, density = 1200, U = 1)
 north_aperture.SetTestValues(250, 0.12, 0.38, 0.5)
-interior_floor = Construction(name = "Interior Floor", area = 100, thickness = 0.25, density = 1200, U = 0.15)
-screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 30)#TTTT
-screen1.SetTestValues(1, 0.05, 0.45, 0.5)
-screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 30)#TTTT
-screen2.SetTestValues(1, 0.05, 0.45, 0.5) #UART
-shading = Construction(name = "Shading", area = 40, thickness = 0.05, density = 2400)
-shading.SetTestValues(1, 0.25, 0.75, 0.0)
-inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.01, density = 1600, U = 30)
-inner_screen.SetTestValues(1, 0.12, 0.53, 0.35)
-wintergarden_floor = Construction(name = "Wintergarden Floor", area = 12, thickness = 0.2, density = 800, U = 1.8)
+interior_floor = Construction(name = "Interior Floor", area = 200, thickness = 0.45, density = 5000, U = 0.15)
+screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 2)#TTTT
+screen1.SetTestValues(1, 0.05, 0.25, 0.7)
+screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 2)#TTTT
+screen2.SetTestValues(1, 0.05, 0.25, 0.7) #UART
+shading = Construction(name = "Shading", area = 10, thickness = 0.25, density = 5400)
+shading.SetTestValues(1, 0.4, 0.6, 0.0)
+inner_screen = Construction(name = "Interior Screen", area = 64, height = 6, thickness = 0.1, density = 2600, U = 0.8)
+inner_screen.SetTestValues(1, 0.12, 0.23, 0.65)
+wintergarden_floor = Construction(name = "Wintergarden Floor", area = 16, thickness = 0.4, density = 7500, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.45, 0.55, 0)
 
 
@@ -1046,9 +1049,9 @@ interior.SetFloorConstruction(interior_floor)
 
 
 strategy = Strategy()
-strategy.shading_ratio = 0.5
-strategy.opening_ratio = 0.4
-strategy.interior_opening_ratio = 0.2
+strategy.shading_ratio = 0.1
+strategy.opening_ratio = 0.02
+strategy.interior_opening_ratio = 0.02
 strategyset = StrategySet()
 strategyset.AddStrategy(strategy)
 
