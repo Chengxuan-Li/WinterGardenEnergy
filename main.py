@@ -68,10 +68,13 @@ class Construction:
         self.height = height
         self.thickness = thickness
         self.density = density
+        self.U = U
+        self.U_multiplier = 1.0
+        self.hour = 0
 
         #GLOBAL OVERRIDES INITIALIZATION FOR INTERNAL TESTS ONLY
         self.heat_capacity = 600 / 3600
-        self.U_value = U
+
         self.absorbance = 0.3
         self.reflectivity = 0.7
         self.transmittance = 0.0
@@ -84,7 +87,7 @@ class Construction:
         # MASS
 
     def SetTestValues(self, U, A, R, T):
-        self.U_value = U
+        self.U = U
         self.absorbance = A
         self.reflectivity = R
         self.transmittance = T
@@ -133,6 +136,10 @@ class Construction:
     @property
     def HeatCapacity(self):
         return self.heat_capacity
+
+    @property
+    def U_value(self):
+        return self.U * self.U_multiplier
 
 #====================================#
 
@@ -302,6 +309,8 @@ class Weather:
         # EXPERIMENTAL ESTIMATIONS
         return 1.225
 
+
+
 class WeatherSet:
     def __init__(self):
         self.records = []
@@ -316,10 +325,23 @@ class WeatherSet:
     def Length(self):
         return len(self.records)
 
+    def IsSummerTime(self, hour):
+        if hour <= 6500 and hour >= 3600:
+            return True
+        else:
+            return False
+
+    def IsDayTime(self, hour):
+        hod = hour - 24 * (math.floor(hour / 24))
+        if hod >= 6 and hod <= 18:
+            return True
+        else:
+            return False
 
 
 class Strategy:
-    def __init__(self, opening_ratio=1.0, interior_opening_ratio=0.02, shading_ratio=0.05, north_opening_ratio = 0.05, heating_threshold = 10.0, heating_goal = 15.0, cooling_goal = 25.0, cooling_threshold = 32.0, internal_gain = 1.2):
+    def __init__(self, hour: int=0, opening_ratio=1.0, interior_opening_ratio=0.02, shading_ratio=0.05, north_opening_ratio = 0.05, heating_threshold = 10.0, heating_goal = 15.0, cooling_goal = 25.0, cooling_threshold = 32.0, internal_gain = 1.2):
+        self.hour = hour
         self.opening_ratio = opening_ratio
         self.interior_opening_ratio = interior_opening_ratio
         self.north_opening_ratio = north_opening_ratio
@@ -332,13 +354,65 @@ class Strategy:
         self.nightpurge_start = 3600
         self.nightpurge_end = 7000
 
+        self.summer_window_u_value_multiplier = 1.0
+        self.summer_night_purge = False
+        self.summer_shading = False
+        self.summer_ventilation = False
+        self.enclose_wintergarden = False
+
+    @property
+    def IsDayTime(self):
+        ws = WeatherSet()
+        return ws.IsDayTime(self.hour)
+
+    @property
+    def IsSummerTime(self):
+        ws = WeatherSet()
+        return ws.IsSummerTime(self.hour)
+
     def __str__(self):
         # TODO: describe different strategies in strings
         pass
 
+    def DoSummerNightPurge(self, purge: bool):
+        self.summer_night_purge = purge
 
+    def SetSummerWindowUValueMultiplier(self, param):
+        self.summer_window_u_value_multiplier = param
 
+    def DoSummerShading(self, shade: bool):
+        self.summer_shading = shade
 
+    def DoSummerVentilation(self, vent: bool):
+        self.summer_ventilation = vent
+
+    def DoEncloseWintergarden(self, enclose: bool):
+        self.enclose_wintergarden = enclose
+
+    @property
+    def UMultipier(self):
+        if self.IsSummerTime:
+            return self.summer_window_u_value_multiplier
+        else:
+            return 1.0
+
+    @property
+    def MaximumVentilation(self):
+        if self.summer_ventilation and self.IsSummerTime:
+            return True
+        if self.summer_night_purge and self.IsSummerTime:
+            if self.IsDayTime:
+                return False
+            else:
+                return True
+        return False
+
+    @property
+    def Shading(self):
+        if self.IsSummerTime and self.summer_shading:
+            return 1.0
+        else:
+            return self.shading_ratio
 
 
 class StrategySet:
@@ -397,8 +471,21 @@ class Wintergarden:
 
     def ApplyStrategy(self, strategy: Strategy):
         self.opening_ratio = strategy.opening_ratio
+        if strategy.MaximumVentilation:
+            self.opening_ratio = 1.0
         self.opening = self.opening_ratio * self.maximum_opening
-        self.shading_ratio = strategy.shading_ratio
+        self.shading_ratio = strategy.Shading
+        for construction in self.constructions:
+            if construction.GetAverageTransmittance() >= 0.1:
+                construction.U_multiplier = strategy.UMultipier
+
+        # TEST
+        if strategy.enclose_wintergarden:
+            pass
+        else:
+            self.temperature = self.weather.temperature
+
+
 
     def SetFloorConstruction(self, construction: Construction):
         self.floor_construction = construction
@@ -484,11 +571,18 @@ class Interior:
 
     def ApplyStrategy(self, strategy: Strategy):
         self.opening_ratio = strategy.interior_opening_ratio
+        if strategy.MaximumVentilation:
+            self.opening_ratio = 1.0
         self.internal_gain = strategy.internal_gain * self.floor_construction.area
         self.heating_threshold = strategy.heating_threshold
         self.heating_goal = strategy.heating_goal
         self.cooling_threshold = strategy.cooling_threshold
         self.cooling_goal = strategy.cooling_goal
+
+        for construction in self.constructions:
+            if construction.GetAverageTransmittance() >= 0.1:
+                construction.U_multiplier = strategy.UMultipier
+
 
 
     def SetFloorConstruction(self, construction: Construction):
@@ -573,12 +667,22 @@ class Room:
 
     def ApplyStrategy(self, strategy: Strategy):
         self.internal_gain = strategy.internal_gain * self.floor_construction.area
+        self.opening_ratio = strategy.north_opening_ratio
+        if strategy.MaximumVentilation:
+            self.opening_ratio = 1.0
         self.heating_threshold = strategy.heating_threshold
         self.heating_goal = strategy.heating_goal
         self.cooling_threshold = strategy.cooling_threshold
         self.cooling_goal = strategy.cooling_goal
         self.opening_ratio = strategy.north_opening_ratio
         self.opening = self.opening_ratio * self.maximum_opening
+
+        for construction in self.constructions:
+            if construction.GetAverageTransmittance() >= 0.1:
+                construction.U_multiplier = strategy.UMultipier
+
+
+
 
 
     def SetFloorConstruction(self, construction: Construction):
@@ -678,10 +782,13 @@ class Model:
             return False
 
     def UpdateStrategy(self):
+
         self.strategy = self.strategyset.GetStrategy(0)#self.hour#)
+        self.strategy.hour = self.hour
         self.wintergarden.ApplyStrategy(self.strategy)
         self.interior.ApplyStrategy(self.strategy)
         self.room.ApplyStrategy(self.strategy)
+
 
     def UpdateWeather(self):
         self.weather = self.weatherset.GetRecord(self.hour)
@@ -771,6 +878,7 @@ class Model:
         self.procedural_radiance_object.normal = self.wintergarden.shading_construction.normal
         self.procedural_radiance_object.Run()
 
+
         portion_shaded = self.wintergarden.shading_construction.area / self.wintergarden.FaceArea * self.wintergarden.shading_ratio
         shading_radiation_from_isotropic = 0.0
         shading_radiation_from_anisotropic = 0.0
@@ -784,6 +892,11 @@ class Model:
         wintergarden_radiation_from_isotropic += shading_radiation_from_isotropic
 
         wintergarden_absorbed_radiation += shading_radiation_from_isotropic + shading_radiation_from_anisotropic
+
+
+        # 0304 ADDED
+        inner_screen_anisotropic_radiation += -shading_radiation_from_anisotropic
+        inner_screen_isotropic_radiation += -shading_radiation_from_isotropic
 
 
         for construction in self.wintergarden.constructions: # second screen layer
@@ -1072,6 +1185,18 @@ class SimulationResults:
             return grouped
         return -1
 
+    def GroupByDailySummation(self, result: List[float]):
+        if len(result) == 8760:
+            grouped = []
+            for i in range(365):
+                daily_result = result[i * 24: i * 24 + 24]
+                daily_total = 0.0
+                for hourly_result in daily_result:
+                    daily_total += hourly_result
+                grouped.append(daily_total)
+            return grouped
+        return -1
+
     def Sum(self, result: List[float]):
         sum = 0
         if len(result) == 8760:
@@ -1080,10 +1205,12 @@ class SimulationResults:
 
         return sum
 
-    def WriteToFile(self):
-        timestamp = time.time() * 100
-        os.mkdir("results/" + str(timestamp))
-        radiation_name = "results/" + str(timestamp) + "/radiation.txt"
+
+
+    def WriteToFile(self, name):
+        timestamp = round(time.time())
+        os.mkdir("results/" + str(timestamp) + name)
+        radiation_name = "results/" + str(timestamp) + name + "/radiation.txt"
         radiation_file = open(radiation_name, "w")
         for i in range(8760):
             radiation_file.write(
@@ -1091,23 +1218,62 @@ class SimulationResults:
                 str(self.wintergarden_radiation_from_isotropic[i]) + "," +
                 str(self.interior_radiation_from_anisotropic[i]) + "," +
                 str(self.interior_radiation_from_isotropic_south[i]) + "," +
+                str(self.interior_radiation_from_isotropic_north[i]) + "," +
                 str(self.shading_radiation_from_anisotropic[i]) + "," +
                 str(self.shading_radiation_from_isotropic[i]) + "\n"
             )
         radiation_file.close()
 
-        temperature_name = "results/" + str(timestamp) + "/temperature.txt"
+        temperature_name = "results/" + str(timestamp) + name + "/temperature.txt"
         temperature_file = open(temperature_name, "w")
         for i in range(8760):
             temperature_file.write(
                 str(self.exterior_temperature[i]) + "," +
                 str(self.wintergarden_temperature[i]) + "," +
-                str(self.interior_temperature[i]) + "\n"
+                str(self.interior_temperature[i]) + "," +
+                str(self.room_temperature[i]) + "\n"
             )
         temperature_file.close()
 
+        convection_name = "results/" + str(timestamp) + name + "/convection.txt"
+        convection_file = open(convection_name, "w")
+        for i in range(8760):
+            convection_file.write(
+                str(self.ventilation_heat_exchange_ew[i]) + "," +
+                str(self.ventilation_heat_exchange_wi[i]) + "," +
+                str(self.ventilation_heat_exchange_ir[i]) + "," +
+                str(self.ventilation_heat_exchange_re[i]) + "," +
+                str(self.infiltration_heat_exchange_ew[i]) + "," +
+                str(self.infiltration_heat_exchange_wi[i]) + "," +
+                str(self.infiltration_heat_exchange_ir[i]) + "," +
+                str(self.infiltration_heat_exchange_re[i]) + "\n"
+            )
+        convection_file.close()
 
-        summary_name = "results/" + str(timestamp) + "/summary.txt"
+        conduction_name = "results/" + str(timestamp) + name + "/conduction.txt"
+        conduction_file = open(conduction_name, "w")
+        for i in range(8760):
+            conduction_file.write(
+                str(self.conduction_ew[i]) + "," +
+                str(self.conduction_wi[i]) + "," +
+                str(self.conduction_ir[i]) + "," +
+                str(self.conduction_re[i]) + "\n"
+            )
+        conduction_file.close()
+
+        loads_name = "results/" + str(timestamp) + name + "/loads.txt"
+        loads_file = open(loads_name, "w")
+        for i in range(8760):
+            loads_file.write(
+                str(self.interior_heating_load[i]) + "," +
+                str(self.interior_cooling_load[i]) + "," +
+                str(self.room_heating_load[i]) + "," +
+                str(self.room_cooling_load[i]) + "\n"
+            )
+        loads_file.close()
+
+
+        summary_name = "results/" + str(timestamp) + name + "/summary.txt"
         summary_file = open(summary_name, "w")
         grouped_temperature = self.GroupByDailyAverage(self.exterior_temperature)
         grouped_wintergarden_temperature = self.GroupByDailyAverage(self.wintergarden_temperature)
@@ -1120,8 +1286,24 @@ class SimulationResults:
             )
         summary_file.close()
 
+        typical_dates_name = "results/" + str(timestamp) + name + "/typical_dates.txt"
+        typical_dates_file = open(typical_dates_name, "w")
+        start_hours = [720, 1392, 2136, 2856, 3600, 4320, 5064, 5808, 6528, 7272, 7992, 8736]
+        for start_hour in start_hours:
+            for i in range(24):
+                hour = start_hour + i
+                typical_dates_file.write(
+                    str(hour) + "," +
+                    str(self.exterior_temperature[hour]) + "," +
+                    str(self.wintergarden_temperature[hour]) + "," +
+                    str(self.interior_temperature[hour]) + "," +
+                    str(self.room_temperature[hour]) + "\n"
+                )
+        typical_dates_file.close()
 
 
+
+        # 0304 TODO ADD REPRESENTATIONAL DATES
 
 
 
@@ -1155,29 +1337,34 @@ for line in LCY:
     )
 
 
-north_wall = Construction(name = "North Facade Exterior Wall", area = 11, thickness = 0.4, density = 4800, U = 1)#TEST UVALUE
-#我是傻逼我把北边整个墙当窗使了难怪天光辐射能这么多
-north_wall.SetTestValues(1, 0.2, 0.85, 0)
-north_aperture = Construction(name = "North Facade Window", area = 5, thickness = 0.1, density = 1200, U = 1)
-north_aperture.SetTestValues(1, 0.05, 0.4, 0.55)
-interior_floor = Construction(name = "Interior Floor", area = 120, thickness = 0.25, density = 4000, U = 0.15)
-room_floor = Construction(name = "Room Floor", area = 20, thickness = 0.25, density = 4000, U = 0.15)
+north_wall = Construction(name = "North Facade Exterior Wall", area = 44, thickness = 0.4, density = 4800, U = 3)#TEST UVALUE
+north_wall.SetTestValues(3, 0.2, 0.8, 0)
+north_aperture = Construction(name = "North Facade Window", area = 20, thickness = 0.1, density = 1200, U = 5)
+north_aperture.SetTestValues(5, 0.05, 0.4, 0.55)
+interior_floor = Construction(name = "Interior Floor", area = 100, thickness = 0.65, density = 3000, U = 0.15)
+room_floor = Construction(name = "Room Floor", area = 20, thickness = 0.25, density = 3000, U = 0.15)
 screen1 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.04, density = 1400, U = 2)#TTTT
 screen1.SetTestValues(2, 0.05, 0.25, 0.7)
 screen2 = Construction(name = "Wintergarden Glazing", area = 32, height = 8, thickness = 0.02, density = 1200, U = 2)#TTTT
 screen2.SetTestValues(2, 0.05, 0.25, 0.7) #UART
-shading = Construction(name = "Shading", area = 24, thickness = 0.25, density = 5400)
-shading.SetTestValues(2, 0.15, 0.85, 0.0)
-inner_screen = Construction(name = "Interior Screen", area = 40, height = 6, thickness = 0.1, density = 2600, U = 1)
-inner_screen.SetTestValues(2, 0.05, 0.75, 0.20)
-inner_opaque = Construction(name = "Interior Opaque", area = 25, height = 6, thickness = 0.4, density = 7400, U = 0.5)
-inner_opaque.SetTestValues(0.5, 0.2, 0.8, 0.0)
-wintergarden_floor = Construction(name = "Wintergarden Floor", area = 16, thickness = 0.4, density = 7500, U = 1.8)
+shading = Construction(name = "Shading", area = 40, thickness = 0.2, density = 800)
+shading.SetTestValues(2, 0.05, 0.95, 0.0)
+inner_screen = Construction(name = "Interior Screen", area = 20, height = 6, thickness = 0.1, density = 2600, U = 0.8)
+inner_screen.SetTestValues(5, 0.05, 0.75, 0.20)
+inner_opaque = Construction(name = "Interior Opaque", area = 44, height = 6, thickness = 0.4, density = 7400, U = 0.2)
+inner_opaque.SetTestValues(3, 0.2, 0.8, 0.0)
+wintergarden_floor = Construction(name = "Wintergarden Floor", area = 16, thickness = 0.1, density = 7000, U = 1.8)
 wintergarden_floor.SetTestValues(1, 0.45, 0.55, 0)
 party_wall = Construction(name = "Party Wall", area = 16, thickness = 0.3, density = 1200, U = 1.2)
 
+
+
+
 test_weather = Weather(0, 20, 120, 30, 600, 120, 3, 60, 101204)
-wintergarden = Wintergarden(test_weather, [inner_screen, inner_opaque], 8 , 1.20)
+wintergarden = Wintergarden(test_weather, [inner_screen, inner_opaque], 8, 1.60)
+
+
+
 
 wintergarden.SetFloorConstruction(wintergarden_floor)
 wintergarden.SetShadingConstruction(shading)
@@ -1191,14 +1378,20 @@ room.SetFloorConstruction(room_floor)
 
 
 strategy = Strategy()
-strategy.shading_ratio = 1
-strategy.opening_ratio = 0.5
-strategy.interior_opening_ratio = 0.5
-strategy.north_opening_ratio = 0.5
+strategy.shading_ratio = 0.0
+strategy.opening_ratio = 1
+strategy.interior_opening_ratio = 1
+strategy.north_opening_ratio = 1
 strategy.heating_threshold = 14
-strategy.heating_goal = 18
+strategy.heating_goal = 15
 strategy.cooling_threshold = 30
 strategy.cooling_goal = 28
+strategy.DoSummerShading(False)
+strategy.DoEncloseWintergarden(False)
+strategy.DoSummerVentilation(False)
+
+strategy.summer_window_u_value_multiplier = 10
+
 strategyset = StrategySet()
 strategyset.AddStrategy(strategy)
 
@@ -1209,16 +1402,19 @@ test_model.UpdateModel()
 while test_model.ready:
     test_model.UpdateModel()
 
-print(test_model.results.Sum(test_model.results.interior_heating_load) / 3600)
-print(test_model.results.Sum(test_model.results.interior_cooling_load) / 3600)
-print(test_model.results.Sum(test_model.results.room_heating_load) / 3600)
-print(test_model.results.Sum(test_model.results.room_cooling_load) / 3600)
+print(str(test_model.results.Sum(test_model.results.interior_heating_load) / 3600) + " kWh")
+print(str(test_model.results.Sum(test_model.results.interior_cooling_load) / 3600) + " kWh")
+print(str(test_model.results.Sum(test_model.results.room_heating_load) / 3600) + " kWh")
+print(str(test_model.results.Sum(test_model.results.room_cooling_load) / 3600) + " kWh")
+
+#test_model.results.WriteToFile("_ORG")
 
 plt.plot(test_model.results.interior_temperature)
 plt.plot(test_model.results.room_temperature)
 plt.plot(test_model.results.exterior_temperature)
+plt.plot(test_model.results.wintergarden_temperature)
 plt.show()
-#test_model.results.WriteToFile()
+
 '''
 p1 = ProceduralRadiance(600, 100, 0.3, 30, 120, Vector3d(0, -1, 0))
 p1.Run()
